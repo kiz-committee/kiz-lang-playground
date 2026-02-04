@@ -60,7 +60,6 @@
             padding: 1rem;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
-        /* 修复：可编辑div的样式（替代原textarea） */
         #editor {
             width: 100%;
             min-height: 300px;
@@ -73,10 +72,9 @@
             resize: vertical;
             background-color: #fafafa;
             outline: none;
-            white-space: pre-wrap;
+            white-space: pre-wrap; /* 确保换行正常显示 */
             overflow-x: auto;
         }
-        /* 修复：编辑时光标样式 */
         #editor:empty::before {
             content: "Write your Kiz code here...";
             color: #9ca3af;
@@ -144,7 +142,6 @@
         </div>
 
         <div class="editor-container">
-            <!-- 修复：替换textarea为可编辑div -->
             <div id="editor" contenteditable="true" spellcheck="false"></div>
         </div>
 
@@ -181,7 +178,6 @@
 
         // 3. 全局状态
         let isLoaded = false;
-        // 初始Kiz代码
         const INIT_KIZ_CODE = `# Kiz Language Playground
 # Try some code below!
 print("Hello Kiz! 🐱")
@@ -190,17 +186,16 @@ print("PI =", 3.1415926)
 print(["a", "b", "c"][1])
 print({name: "Kiz", version: 0.50})`;
 
-        // 4. 输出工具函数：向页面输出内容（带类型）
+        // 4. 输出工具函数
         function appendOutput(text, type = 'info') {
             const line = document.createElement('span');
             line.className = type;
             line.textContent = text;
             output.appendChild(line);
-            // 自动滚动到底部
             output.scrollTop = output.scrollHeight;
         }
 
-        // 5. 前端输出回调（供WASM/C++调用）
+        // 5. WASM输出回调
         window.kizWasmOutput = function(text) {
             appendOutput(text, 'success');
         };
@@ -208,68 +203,97 @@ print({name: "Kiz", version: 0.50})`;
             appendOutput(text, 'error');
         };
 
-        // 6. 编辑器辅助函数：保存/恢复光标位置（解决高亮后光标跳动问题）
-        function getCursorPosition(element) {
-            let pos = 0;
+        // 6. 核心优化：光标位置处理（适配高亮后的DOM结构）
+        function getCursorOffset() {
             const selection = window.getSelection();
-            if (selection.rangeCount > 0) {
-                const range = selection.getRangeAt(0);
-                const preCaretRange = range.cloneRange();
-                preCaretRange.selectNodeContents(element);
-                preCaretRange.setEnd(range.endContainer, range.endOffset);
-                pos = preCaretRange.toString().length;
-            }
-            return pos;
+            if (!selection.rangeCount) return 0;
+            
+            const range = selection.getRangeAt(0);
+            const preRange = document.createRange();
+            preRange.selectNodeContents(editor);
+            preRange.setEnd(range.endContainer, range.endOffset);
+            return preRange.toString().length;
         }
-        function setCursorPosition(element, pos) {
-            const range = document.createRange();
-            const selection = window.getSelection();
-            let currentPos = 0;
-            let node = element.firstChild;
 
-            while (node) {
-                if (node.nodeType === 3) { // 文本节点
-                    const textLength = node.textContent.length;
-                    if (currentPos + textLength >= pos) {
-                        range.setStart(node, pos - currentPos);
-                        range.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(range);
+        function setCursorByOffset(offset) {
+            const selection = window.getSelection();
+            const range = document.createRange();
+            let currentOffset = 0;
+            let targetNode = null;
+            let targetOffset = 0;
+
+            function traverseNodes(node) {
+                if (targetNode) return;
+                if (node.nodeType === 3) { 
+                    const len = node.textContent.length;
+                    if (currentOffset + len >= offset) {
+                        targetNode = node;
+                        targetOffset = offset - currentOffset;
                         return;
                     }
-                    currentPos += textLength;
+                    currentOffset += len;
                 }
-                node = node.nextSibling;
+                for (let child of node.childNodes) {
+                    traverseNodes(child);
+                }
+            }
+
+            traverseNodes(editor);
+            if (targetNode) {
+                range.setStart(targetNode, targetOffset);
+                range.collapse(true);
+                selection.removeAllRanges();
+                selection.addRange(range);
             }
         }
 
-        // 7. 编辑器高亮逻辑（适配可编辑div）
+        // 7. 编辑器高亮逻辑（延迟执行+精准光标恢复）
+        let highlightTimer = null;
         function highlightEditor() {
-            // 保存当前光标位置
-            const cursorPos = getCursorPosition(editor);
-            // 获取编辑器纯文本内容
-            const code = editor.textContent;
-            // 高亮并渲染为HTML
-            const highlighted = hljs.highlight(code, { language: 'kiz' }).value;
-            editor.innerHTML = highlighted;
-            // 恢复光标位置
-            setCursorPosition(editor, cursorPos);
+            clearTimeout(highlightTimer);
+            highlightTimer = setTimeout(() => {
+                const cursorOffset = getCursorOffset();
+                const code = editor.textContent; // 包含纯文本换行符
+                const highlighted = hljs.highlight(code, { language: 'kiz' }).value;
+                editor.innerHTML = highlighted;
+                setCursorByOffset(cursorOffset);
+            }, 30); // 缩短延迟，提升响应
         }
-        // 初始填充代码+高亮
+
+        // 8. 修复：手动处理Enter键（插入纯文本换行）
+        editor.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault(); // 阻止默认的HTML标签换行
+                const selection = window.getSelection();
+                if (!selection.rangeCount) return;
+
+                const range = selection.getRangeAt(0);
+                // 插入纯文本换行符
+                range.insertNode(document.createTextNode('\n'));
+                // 移动光标到换行符后方
+                range.setStartAfter(range.endContainer);
+                range.collapse(true);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                
+                // 触发高亮（保持样式同步）
+                highlightEditor();
+            }
+        });
+
+        // 初始填充+高亮
         editor.textContent = INIT_KIZ_CODE;
         highlightEditor();
-        // 编辑时重新高亮
+        // 输入时触发高亮
         editor.addEventListener('input', highlightEditor);
 
-        // 8. 按钮事件
-        // 清空输出
+        // 9. 按钮事件
         clearBtn.addEventListener('click', () => {
             output.innerHTML = '';
         });
-        // 运行代码
+
         runBtn.addEventListener('click', () => {
             if (!isLoaded) return;
-            // 清空上次输出
             output.innerHTML = '';
             const code = editor.textContent.trim();
             if (!code) {
@@ -278,43 +302,38 @@ print({name: "Kiz", version: 0.50})`;
             }
 
             try {
-                // 调用WASM的run_kiz_code函数
                 const result = Module.ccall(
                     'run_kiz_code',
                     'number',
                     ['string', 'number'],
                     [code, code.length]
                 );
-                if (result === 0) {
-                    appendOutput('\n✅ Kiz code executed successfully!', 'success');
-                } else {
-                    appendOutput('\n❌ Kiz code executed with errors!', 'error');
-                }
+                appendOutput(result === 0 
+                    ? '\n✅ Kiz code executed successfully!' 
+                    : '\n❌ Kiz code executed with errors!',
+                    result === 0 ? 'success' : 'error'
+                );
             } catch (err) {
                 appendOutput(`\n❌ JS/WASM call error: ${err.message}\n`, 'error');
             }
         });
 
-        // 9. 加载Emscripten胶水代码（必须修改路径！）
+        // 10. 加载WASM（修改路径）
         function loadKizWasm() {
             const script = document.createElement('script');
-            // ********** 请修改为你的kiz.js实际路径 **********
-            // 示例：script.src = 'https://playground.kiz.random321.com/kiz.js';
+            // ********** 替换为你的kiz.js实际路径 **********
             script.src = 'kiz.js';
             script.type = 'text/javascript';
 
-            // 加载成功
             script.onload = function() {
                 output.innerHTML = '';
                 appendOutput('✅ Kiz WASM runtime loaded successfully!\n', 'success');
                 appendOutput('📝 Write your Kiz code and click RUN!\n', 'info');
                 isLoaded = true;
                 runBtn.disabled = false;
-                // 初始化Kiz VM
                 Module.ccall('kiz_wasm_init', 'void', [], []);
             };
 
-            // 加载失败
             script.onerror = function(err) {
                 output.innerHTML = '';
                 appendOutput(`❌ Failed to load Kiz WASM: ${err.message || 'unknown error'}\n`, 'error');
@@ -324,7 +343,6 @@ print({name: "Kiz", version: 0.50})`;
             document.body.appendChild(script);
         }
 
-        // 页面加载时自动加载WASM
         window.addEventListener('load', loadKizWasm);
     </script>
 </body>
