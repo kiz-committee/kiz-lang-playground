@@ -107,8 +107,7 @@
         </div>
 
         <div class="editor-container">
-            <pre><code id="editor" contenteditable="true" spellcheck="false">import std;
-
+            <pre><code id="editor" contenteditable="true" spellcheck="false">
 # Kiz example
 print("hello world")</code></pre>
         </div>
@@ -132,8 +131,8 @@ print("hello world")</code></pre>
                     hljs.NUMBER_MODE,
                     {
                         className: 'object',
-                        begin: 'object\\s+[A-Za-z_][A-Za-z0-9_]*',
-                        end: '{',
+                        begin: 'class\\s+[A-Za-z_][A-Za-z0-9_]*',
+                        end: '\n',
                         excludeEnd: true,
                         contains: [
                             {
@@ -145,7 +144,7 @@ print("hello world")</code></pre>
                     {
                         className: 'fn',
                         begin: 'fn\\s+[A-Za-z_][A-Za-z0-9_]*',
-                        end: '{',
+                        end: '\n',
                         excludeEnd: true,
                         contains: [
                             {
