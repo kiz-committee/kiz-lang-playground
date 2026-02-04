@@ -72,12 +72,15 @@
             resize: vertical;
             background-color: #fafafa;
             outline: none;
-            white-space: pre-wrap; /* 确保换行正常显示 */
+            white-space: pre-wrap;
             overflow-x: auto;
+            caret-color: #3b82f6; /* 优化光标可视性 */
+            caret-shape: bar; /* 统一光标形状 */
         }
         #editor:empty::before {
             content: "Write your Kiz code here...";
             color: #9ca3af;
+            pointer-events: none; /* 避免占位符干扰光标 */
         }
         .output-container {
             background-color: white;
@@ -132,6 +135,10 @@
             color: #6b7280;
             font-style: italic;
         }
+        /* 隐藏高亮span的outline，避免干扰光标 */
+        #editor span {
+            outline: none;
+        }
     </style>
 </head>
 <body>
@@ -142,7 +149,7 @@
         </div>
 
         <div class="editor-container">
-            <div id="editor" contenteditable="true" spellcheck="false"></div>
+            <div id="editor" contenteditable="true" spellcheck="false" autocorrect="off" autocapitalize="off"></div>
         </div>
 
         <div class="output-container">
@@ -203,89 +210,140 @@ print({name: "Kiz", version: 0.50})`;
             appendOutput(text, 'error');
         };
 
-        // 6. 核心优化：光标位置处理（适配高亮后的DOM结构）
+        // ========== 核心修复：光标处理函数 ==========
+        // 获取编辑器纯文本（忽略DOM结构）
+        function getEditorPureText() {
+            return editor.textContent.replace(/\u200B/g, ''); // 移除零宽空格
+        }
+        // 精准获取光标偏移量（基于纯文本，兼容任意DOM结构）
         function getCursorOffset() {
             const selection = window.getSelection();
-            if (!selection.rangeCount) return 0;
-            
+            if (!selection.rangeCount || editor.isContentEditable === false) return 0;
             const range = selection.getRangeAt(0);
             const preRange = document.createRange();
             preRange.selectNodeContents(editor);
             preRange.setEnd(range.endContainer, range.endOffset);
-            return preRange.toString().length;
+            // 过滤零宽空格，保证偏移量和纯文本一致
+            return preRange.toString().replace(/\u200B/g, '').length;
         }
-
-        function setCursorByOffset(offset) {
-            const selection = window.getSelection();
-            const range = document.createRange();
-            let currentOffset = 0;
-            let targetNode = null;
-            let targetOffset = 0;
-
-            function traverseNodes(node) {
-                if (targetNode) return;
-                if (node.nodeType === 3) { 
-                    const len = node.textContent.length;
-                    if (currentOffset + len >= offset) {
-                        targetNode = node;
-                        targetOffset = offset - currentOffset;
-                        return;
-                    }
-                    currentOffset += len;
+        // 修复节点遍历：处理元素节点/空文本节点，兼容高亮后的span
+        function traverseNodesForOffset(node, targetOffset, currentOffset = 0) {
+            let result = { node: null, offset: 0 };
+            // 文本节点：计算偏移
+            if (node.nodeType === 3) {
+                const text = node.textContent.replace(/\u200B/g, '');
+                const len = text.length;
+                if (currentOffset + len >= targetOffset) {
+                    result.node = node;
+                    result.offset = targetOffset - currentOffset;
+                    return result;
                 }
+                currentOffset += len;
+            }
+            // 元素节点：递归遍历子节点（跳过注释/脚本节点）
+            else if (node.nodeType === 1 && node.tagName !== 'SCRIPT' && node.tagName !== 'COMMENT') {
                 for (let child of node.childNodes) {
-                    traverseNodes(child);
+                    result = traverseNodesForOffset(child, targetOffset, currentOffset);
+                    if (result.node) return result;
+                    currentOffset = result.offset; // 更新累计偏移
                 }
             }
-
-            traverseNodes(editor);
-            if (targetNode) {
-                range.setStart(targetNode, targetOffset);
+            return { node: result.node, offset: currentOffset };
+        }
+        // 精准设置光标偏移量（核心修复）
+        function setCursorByOffset(offset) {
+            if (editor.isContentEditable === false || offset < 0) return;
+            const selection = window.getSelection();
+            const pureText = getEditorPureText();
+            const targetOffset = Math.min(offset, pureText.length); // 防止越界
+            const result = traverseNodesForOffset(editor, targetOffset);
+            if (result.node) {
+                const range = document.createRange();
+                range.setStart(result.node, result.offset);
                 range.collapse(true);
                 selection.removeAllRanges();
                 selection.addRange(range);
+                editor.focus(); // 确保编辑器聚焦
+            }
+            // 空编辑器时，光标定位到起始位置
+            else if (pureText.length === 0) {
+                const range = document.createRange();
+                range.selectNodeContents(editor);
+                range.collapse(true);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                editor.focus();
             }
         }
 
-        // 7. 编辑器高亮逻辑（延迟执行+精准光标恢复）
-        let highlightTimer = null;
+        // ========== 修复高亮逻辑：避免定时器叠加+顺滑更新 ==========
+        let highlightPending = false;
         function highlightEditor() {
-            clearTimeout(highlightTimer);
-            highlightTimer = setTimeout(() => {
-                const cursorOffset = getCursorOffset();
-                const code = editor.textContent; // 包含纯文本换行符
+            if (highlightPending || !editor.textContent) return;
+            highlightPending = true;
+            // 用requestAnimationFrame替代setTimeout，避免快速输入叠加，更顺滑
+            requestAnimationFrame(() => {
+                const cursorOffset = getCursorOffset(); // 记录光标
+                const code = getEditorPureText();
+                // 高亮后保留换行/空格，兼容contenteditable
                 const highlighted = hljs.highlight(code, { language: 'kiz' }).value;
                 editor.innerHTML = highlighted;
-                setCursorByOffset(cursorOffset);
-            }, 30); // 缩短延迟，提升响应
+                setCursorByOffset(cursorOffset); // 恢复光标
+                highlightPending = false;
+            });
         }
 
-        // 8. 修复：手动处理Enter键（插入纯文本换行）
+        // ========== 核心修复：Enter键换行+光标处理 ==========
         editor.addEventListener('keydown', (e) => {
+            // 阻止默认换行（避免生成<div>/<br>，保持纯文本换行）
             if (e.key === 'Enter') {
-                e.preventDefault(); // 阻止默认的HTML标签换行
-                const selection = window.getSelection();
-                if (!selection.rangeCount) return;
-
-                const range = selection.getRangeAt(0);
-                // 插入纯文本换行符
-                range.insertNode(document.createTextNode('\n'));
-                // 移动光标到换行符后方
-                range.setStartAfter(range.endContainer);
-                range.collapse(true);
-                selection.removeAllRanges();
-                selection.addRange(range);
-                
-                // 触发高亮（保持样式同步）
+                e.preventDefault();
+                e.stopPropagation();
+                const cursorOffset = getCursorOffset();
+                // 插入纯文本换行（零宽空格防止DOM合并节点）
+                editor.textContent = getEditorPureText().slice(0, cursorOffset) + '\n' + getEditorPureText().slice(cursorOffset);
+                setCursorByOffset(cursorOffset + 1); // 光标移到换行后
+                highlightEditor(); // 同步高亮
+            }
+            // 阻止Tab默认行为，可自定义Tab为4个空格（可选）
+            else if (e.key === 'Tab') {
+                e.preventDefault();
+                const cursorOffset = getCursorOffset();
+                editor.textContent = getEditorPureText().slice(0, cursorOffset) + '    ' + getEditorPureText().slice(cursorOffset);
+                setCursorByOffset(cursorOffset + 4);
                 highlightEditor();
             }
+        });
+
+        // ========== 编辑器事件优化 ==========
+        // 输入时触发高亮（防抖+无叠加）
+        editor.addEventListener('input', () => {
+            // 过滤空输入/仅空格的情况
+            if (getEditorPureText().trim() || editor.textContent) {
+                highlightEditor();
+            }
+        });
+        // 编辑器聚焦时，确保光标可见
+        editor.addEventListener('focus', () => {
+            if (!window.getSelection().rangeCount) {
+                setCursorByOffset(getEditorPureText().length);
+            }
+        });
+        // 粘贴时过滤富文本，仅保留纯文本（避免DOM混乱）
+        editor.addEventListener('paste', (e) => {
+            e.preventDefault();
+            const text = e.clipboardData.getData('text/plain');
+            const cursorOffset = getCursorOffset();
+            editor.textContent = getEditorPureText().slice(0, cursorOffset) + text + getEditorPureText().slice(cursorOffset);
+            setCursorByOffset(cursorOffset + text.length);
+            highlightEditor();
         });
 
         // 初始填充+高亮
         editor.textContent = INIT_KIZ_CODE;
         highlightEditor();
-        // 输入时触发高亮
-        editor.addEventListener('input', highlightEditor);
+        editor.focus();
+        setCursorByOffset(getEditorPureText().length); // 初始光标移到代码末尾
 
         // 9. 按钮事件
         clearBtn.addEventListener('click', () => {
@@ -295,7 +353,7 @@ print({name: "Kiz", version: 0.50})`;
         runBtn.addEventListener('click', () => {
             if (!isLoaded) return;
             output.innerHTML = '';
-            const code = editor.textContent.trim();
+            const code = getEditorPureText().trim();
             if (!code) {
                 appendOutput('❌ Empty Kiz code!\n', 'error');
                 return;
