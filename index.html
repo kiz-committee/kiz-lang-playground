@@ -50,6 +50,10 @@
         .run-btn:hover {
             background-color: #2563eb;
         }
+        .run-btn:disabled {
+            background-color: #93c5fd;
+            cursor: not-allowed;
+        }
         .editor-container {
             background-color: white;
             border-radius: 0.75rem;
@@ -68,6 +72,8 @@
             resize: vertical;
             background-color: #fafafa;
             outline: none;
+            white-space: pre;
+            overflow-x: auto;
         }
         .output-container {
             background-color: white;
@@ -75,10 +81,27 @@
             padding: 1rem;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
-        .output-container h3 {
+        .output-container .output-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 0.75rem;
+        }
+        .output-container h3 {
             font-size: 1.2rem;
             color: #1f2937;
+        }
+        .clear-btn {
+            background-color: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .clear-btn:hover {
+            background-color: #e5e7eb;
         }
         #output {
             background-color: #fafafa;
@@ -90,12 +113,20 @@
             font-size: 0.95rem;
             white-space: pre-wrap;
             line-height: 1.4;
+            color: #1f2937;
         }
-        .error {
+        #output .success {
+            color: #10b981;
+        }
+        #output .error {
             color: #ef4444;
         }
-        .success {
-            color: #10b981;
+        #output .info {
+            color: #3b82f6;
+        }
+        .loading {
+            color: #6b7280;
+            font-style: italic;
         }
     </style>
 </head>
@@ -103,24 +134,30 @@
     <div class="playground-container">
         <div class="header">
             <h1>Kiz Playground</h1>
-            <button class="run-btn" id="runBtn">RUN</button>
+            <button class="run-btn" id="runBtn" disabled>RUN</button>
         </div>
 
         <div class="editor-container">
-            <pre><code id="editor" class="language-kiz" contenteditable="true" spellcheck="false">
-# Kiz example
-print("hello world")
-</code></pre>
+            <textarea id="editor"># Kiz Language Playground
+# Try some code below!
+print("Hello Kiz! 🐱")
+print(1 + 2 * 3)
+print("PI =", 3.1415926)
+print(["a", "b", "c"][1])
+print({name: "Kiz", version: 0.50})</textarea>
         </div>
 
         <div class="output-container">
-            <h3>Output</h3>
-            <div id="output"></div>
+            <div class="output-header">
+                <h3>Output</h3>
+                <button class="clear-btn" id="clearBtn">Clear</button>
+            </div>
+            <div id="output" class="loading">Loading Kiz WASM runtime... 🚀</div>
         </div>
     </div>
 
     <script>
-        // 注册Kiz语言高亮
+        // 1. 注册Kiz语言高亮
         hljs.registerLanguage('kiz', function(hljs) {
             return {
                 keywords: {
@@ -135,61 +172,116 @@ print("hello world")
             };
         });
 
+        // 2. 全局元素获取
         const editor = document.getElementById('editor');
         const output = document.getElementById('output');
         const runBtn = document.getElementById('runBtn');
+        const clearBtn = document.getElementById('clearBtn');
 
-        // 初始高亮
-        hljs.highlightElement(editor);
+        // 3. 全局状态
+        let isLoaded = false;
 
-        // 编辑器内容变化时重新高亮
-        editor.addEventListener('input', () => {
-            hljs.highlightElement(editor);
-        });
-
-        // 加载Kiz WASM
-        let kizWasm;
-        async function loadWasm() {
-            try {
-                // 确保路径正确
-                const response = await fetch('assets/kiz.wasm');
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const bytes = await response.arrayBuffer();
-                const { instance } = await WebAssembly.instantiate(bytes);
-                kizWasm = instance;
-                output.textContent = "✅ Kiz runtime loaded successfully!";
-                output.className = "success";
-            } catch (err) {
-                output.textContent = `❌ Failed to load Kiz WASM: ${err.message}`;
-                output.className = "error";
-            }
+        // 4. 输出工具函数：向页面输出内容（带类型）
+        function appendOutput(text, type = 'info') {
+            const line = document.createElement('span');
+            line.className = type;
+            line.textContent = text;
+            output.appendChild(line);
+            // 自动滚动到底部
+            output.scrollTop = output.scrollHeight;
         }
 
-        // 运行按钮点击事件
-        runBtn.addEventListener('click', async () => {
-            if (!kizWasm) {
-                output.textContent = "❌ Kiz runtime not loaded yet. Please wait...";
-                output.className = "error";
-                await loadWasm();
+        // 5. 前端输出回调（供WASM/C++调用）
+        window.kizWasmOutput = function(text) {
+            appendOutput(text, 'success');
+        };
+        window.kizWasmOutputErr = function(text) {
+            appendOutput(text, 'error');
+        };
+
+        // 6. 编辑器/按钮事件
+        // 高亮编辑器（textarea值变化时）
+        function highlightEditor() {
+            // 保存光标位置
+            const start = editor.selectionStart;
+            const end = editor.selectionEnd;
+            // 高亮并替换内容
+            const highlighted = hljs.highlight(editor.value, { language: 'kiz' }).value;
+            editor.value = highlighted;
+            // 恢复光标位置
+            editor.selectionStart = start;
+            editor.selectionEnd = end;
+        }
+        // 初始高亮
+        highlightEditor();
+        editor.addEventListener('input', highlightEditor);
+        // 清空输出
+        clearBtn.addEventListener('click', () => {
+            output.innerHTML = '';
+        });
+
+        // 7. 核心：运行Kiz代码（调用WASM）
+        runBtn.addEventListener('click', () => {
+            if (!isLoaded) return;
+            // 清空上次输出
+            output.innerHTML = '';
+            const code = editor.value.trim();
+            if (!code) {
+                appendOutput('❌ Empty Kiz code!\n', 'error');
                 return;
             }
 
             try {
-                const code = editor.textContent;
-                // 调用WASM中的编译执行函数
-                const result = kizWasm.exports.run(code);
-                output.textContent = result;
-                output.className = "success";
+                // 调用WASM的run_kiz_code函数（Emscripten ccall）
+                // ccall(函数名, 返回值类型, [参数类型], [参数值])
+                const result = Module.ccall(
+                    'run_kiz_code',
+                    'number',
+                    ['string', 'number'],
+                    [code, code.length]
+                );
+                // 执行结果：0=成功，1=失败
+                if (result === 0) {
+                    appendOutput('\n✅ Kiz code executed successfully!', 'success');
+                } else {
+                    appendOutput('\n❌ Kiz code executed with errors!', 'error');
+                }
             } catch (err) {
-                output.textContent = `❌ Runtime error: ${err.message}`;
-                output.className = "error";
+                appendOutput(`\n❌ JS/WASM call error: ${err.message}\n`, 'error');
             }
         });
 
+        // 8. 加载Emscripten胶水代码（核心：替代直接加载WASM）
+        // 动态创建script标签加载kiz.js（编译后的胶水代码）
+        function loadKizWasm() {
+            const script = document.createElement('script');
+            // ********** 关键：修改为你的kiz.js实际路径 **********
+            script.src = 'kiz.js';
+            script.type = 'text/javascript';
+
+            // 加载成功
+            script.onload = function() {
+                output.innerHTML = '';
+                appendOutput('✅ Kiz WASM runtime loaded successfully!\n', 'success');
+                appendOutput('📝 Write your Kiz code and click RUN!\n', 'info');
+                isLoaded = true;
+                runBtn.disabled = false;
+                // 初始化Kiz VM（调用WASM的初始化函数）
+                Module.ccall('kiz_wasm_init', 'void', [], []);
+            };
+
+            // 加载失败
+            script.onerror = function(err) {
+                output.innerHTML = '';
+                appendOutput(`❌ Failed to load Kiz WASM: ${err.message}\n`, 'error');
+                appendOutput('💡 Check if kiz.js/kiz.wasm are in the correct path!', 'error');
+            };
+
+            document.body.appendChild(script);
+        }
+
         // 页面加载时自动加载WASM
-        window.addEventListener('load', loadWasm);
+        window.addEventListener('load', loadKizWasm);
     </script>
 </body>
 </html>
