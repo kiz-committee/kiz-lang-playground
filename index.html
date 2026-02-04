@@ -125,35 +125,12 @@ print("hello world")
             return {
                 keywords: {
                     keyword: 'import object fn return if else for while break next in is and or not False True Nil try catch end finally throw global nonlocal this',
+                    built_in: 'print input type_of ischild setattr getattr hasattr delattr help cmd range now Object Int Str Bool List Dict Error Module Func NFunc'
                 },
                 contains: [
                     hljs.COMMENT('#', '$'),
                     hljs.QUOTE_STRING_MODE,
                     hljs.NUMBER_MODE,
-                    {
-                        className: 'object',
-                        begin: 'class\\s+[A-Za-z_][A-Za-z0-9_]*',
-                        end: '\n',
-                        excludeEnd: true,
-                        contains: [
-                            {
-                                className: 'title',
-                                begin: '[A-Za-z_][A-Za-z0-9_]*'
-                            }
-                        ]
-                    },
-                    {
-                        className: 'fn',
-                        begin: 'fn\\s+[A-Za-z_][A-Za-z0-9_]*',
-                        end: '\n',
-                        excludeEnd: true,
-                        contains: [
-                            {
-                                className: 'title',
-                                begin: '[A-Za-z_][A-Za-z0-9_]*'
-                            }
-                        ]
-                    }
                 ]
             };
         });
