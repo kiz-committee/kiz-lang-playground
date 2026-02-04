@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kiz Playground</title>
+    <!-- 引入highlight.js -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: #f9fafb;
+            color: #1f2937;
+            padding: 2rem;
+        }
+
+        .playground-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .header h1 {
+            font-size: 1.8rem;
+            color: #111827;
+            font-weight: 600;
+        }
+
+        .run-btn {
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .run-btn:hover {
+            background-color: #2563eb;
+        }
+
+        .editor-container {
+            background-color: white;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 300px;
+            padding: 1rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 1rem;
+            line-height: 1.5;
+            resize: vertical;
+            background-color: #fafafa;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .output-container {
+            background-color: white;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .output-container h3 {
+            margin-bottom: 0.75rem;
+            font-size: 1.2rem;
+            color: #1f2937;
+        }
+
+        #output {
+            background-color: #fafafa;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            min-height: 150px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.95rem;
+            white-space: pre-wrap;
+            line-height: 1.4;
+        }
+
+        .error {
+            color: #ef4444;
+        }
+
+        .success {
+            color: #10b981;
+        }
+    </style>
+</head>
+<body>
+    <div class="playground-container">
+        <div class="header">
+            <h1>Kiz Playground</h1>
+            <button class="run-btn" id="runBtn">RUN</button>
+        </div>
+
+        <div class="editor-container">
+            <textarea id="editor" spellcheck="false">
+import std;
+
+// Kiz example
+class Foo {
+    def m;
+    func __init__(s) {
+        s.m=0;
+    }
+    func __add__(s) {
+        println("u");
+    }
+}
+
+def f = Foo.new;
+            </textarea>
+        </div>
+
+        <div class="output-container">
+            <h3>Output</h3>
+            <div id="output"></div>
+        </div>
+    </div>
+
+    <script>
+        // 初始化代码高亮
+        hljs.registerLanguage('kiz', function(hljs) {
+            return {
+                keywords: {
+                    keyword: 'import class def func return if else for while break continue',
+                    built_in: 'std println new'
+                },
+                contains: [
+                    hljs.COMMENT('//', '$'),
+                    hljs.QUOTE_STRING_MODE,
+                    hljs.NUMBER_MODE,
+                    {
+                        className: 'class',
+                        begin: 'class\\s+[A-Za-z_][A-Za-z0-9_]*',
+                        end: '{',
+                        excludeEnd: true,
+                        contains: [
+                            {
+                                className: 'title',
+                                begin: '[A-Za-z_][A-Za-z0-9_]*'
+                            }
+                        ]
+                    },
+                    {
+                        className: 'function',
+                        begin: 'func\\s+[A-Za-z_][A-Za-z0-9_]*',
+                        end: '{',
+                        excludeEnd: true,
+                        contains: [
+                            {
+                                className: 'title',
+                                begin: '[A-Za-z_][A-Za-z0-9_]*'
+                            }
+                        ]
+                    }
+                ]
+            };
+        });
+
+        const editor = document.getElementById('editor');
+        const output = document.getElementById('output');
+        const runBtn = document.getElementById('runBtn');
+
+        // 初始高亮
+        hljs.highlightElement(editor);
+
+        // 编辑器内容变化时重新高亮
+        editor.addEventListener('input', () => {
+            hljs.highlightElement(editor);
+        });
+
+        // 加载Kiz WASM
+        let kizWasm;
+        async function loadWasm() {
+            try {
+                const response = await fetch('assets/kiz.wasm');
+                const bytes = await response.arrayBuffer();
+                const { instance } = await WebAssembly.instantiate(bytes);
+                kizWasm = instance;
+                output.textContent = "✅ Kiz runtime loaded successfully!";
+                output.className = "success";
+            } catch (err) {
+                output.textContent = `❌ Failed to load Kiz WASM: ${err.message}`;
+                output.className = "error";
+            }
+        }
+
+        // 运行按钮点击事件
+        runBtn.addEventListener('click', async () => {
+            if (!kizWasm) {
+                output.textContent = "❌ Kiz runtime not loaded yet. Please wait...";
+                output.className = "error";
+                await loadWasm();
+                return;
+            }
+
+            try {
+                const code = editor.value;
+                // 调用WASM中的编译执行函数
+                const result = kizWasm.exports.run(code);
+                output.textContent = result;
+                output.className = "success";
+            } catch (err) {
+                output.textContent = `❌ Runtime error: ${err.message}`;
+                output.className = "error";
+            }
+        });
+
+        // 页面加载时自动加载WASM
+        window.addEventListener('load', loadWasm);
+    </script>
+</body>
+</html>
