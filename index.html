@@ -60,6 +60,7 @@
             padding: 1rem;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
+        /* 修复：可编辑div的样式（替代原textarea） */
         #editor {
             width: 100%;
             min-height: 300px;
@@ -72,8 +73,13 @@
             resize: vertical;
             background-color: #fafafa;
             outline: none;
-            white-space: pre;
+            white-space: pre-wrap;
             overflow-x: auto;
+        }
+        /* 修复：编辑时光标样式 */
+        #editor:empty::before {
+            content: "Write your Kiz code here...";
+            color: #9ca3af;
         }
         .output-container {
             background-color: white;
@@ -138,13 +144,8 @@
         </div>
 
         <div class="editor-container">
-            <textarea id="editor"># Kiz Language Playground
-# Try some code below!
-print("Hello Kiz! 🐱")
-print(1 + 2 * 3)
-print("PI =", 3.1415926)
-print(["a", "b", "c"][1])
-print({name: "Kiz", version: 0.50})</textarea>
+            <!-- 修复：替换textarea为可编辑div -->
+            <div id="editor" contenteditable="true" spellcheck="false"></div>
         </div>
 
         <div class="output-container">
@@ -180,6 +181,14 @@ print({name: "Kiz", version: 0.50})</textarea>
 
         // 3. 全局状态
         let isLoaded = false;
+        // 初始Kiz代码
+        const INIT_KIZ_CODE = `# Kiz Language Playground
+# Try some code below!
+print("Hello Kiz! 🐱")
+print(1 + 2 * 3)
+print("PI =", 3.1415926)
+print(["a", "b", "c"][1])
+print({name: "Kiz", version: 0.50})`;
 
         // 4. 输出工具函数：向页面输出内容（带类型）
         function appendOutput(text, type = 'info') {
@@ -199,48 +208,83 @@ print({name: "Kiz", version: 0.50})</textarea>
             appendOutput(text, 'error');
         };
 
-        // 6. 编辑器/按钮事件
-        // 高亮编辑器（textarea值变化时）
-        function highlightEditor() {
-            // 保存光标位置
-            const start = editor.selectionStart;
-            const end = editor.selectionEnd;
-            // 高亮并替换内容
-            const highlighted = hljs.highlight(editor.value, { language: 'kiz' }).value;
-            editor.value = highlighted;
-            // 恢复光标位置
-            editor.selectionStart = start;
-            editor.selectionEnd = end;
+        // 6. 编辑器辅助函数：保存/恢复光标位置（解决高亮后光标跳动问题）
+        function getCursorPosition(element) {
+            let pos = 0;
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                const preCaretRange = range.cloneRange();
+                preCaretRange.selectNodeContents(element);
+                preCaretRange.setEnd(range.endContainer, range.endOffset);
+                pos = preCaretRange.toString().length;
+            }
+            return pos;
         }
-        // 初始高亮
+        function setCursorPosition(element, pos) {
+            const range = document.createRange();
+            const selection = window.getSelection();
+            let currentPos = 0;
+            let node = element.firstChild;
+
+            while (node) {
+                if (node.nodeType === 3) { // 文本节点
+                    const textLength = node.textContent.length;
+                    if (currentPos + textLength >= pos) {
+                        range.setStart(node, pos - currentPos);
+                        range.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                        return;
+                    }
+                    currentPos += textLength;
+                }
+                node = node.nextSibling;
+            }
+        }
+
+        // 7. 编辑器高亮逻辑（适配可编辑div）
+        function highlightEditor() {
+            // 保存当前光标位置
+            const cursorPos = getCursorPosition(editor);
+            // 获取编辑器纯文本内容
+            const code = editor.textContent;
+            // 高亮并渲染为HTML
+            const highlighted = hljs.highlight(code, { language: 'kiz' }).value;
+            editor.innerHTML = highlighted;
+            // 恢复光标位置
+            setCursorPosition(editor, cursorPos);
+        }
+        // 初始填充代码+高亮
+        editor.textContent = INIT_KIZ_CODE;
         highlightEditor();
+        // 编辑时重新高亮
         editor.addEventListener('input', highlightEditor);
+
+        // 8. 按钮事件
         // 清空输出
         clearBtn.addEventListener('click', () => {
             output.innerHTML = '';
         });
-
-        // 7. 核心：运行Kiz代码（调用WASM）
+        // 运行代码
         runBtn.addEventListener('click', () => {
             if (!isLoaded) return;
             // 清空上次输出
             output.innerHTML = '';
-            const code = editor.value.trim();
+            const code = editor.textContent.trim();
             if (!code) {
                 appendOutput('❌ Empty Kiz code!\n', 'error');
                 return;
             }
 
             try {
-                // 调用WASM的run_kiz_code函数（Emscripten ccall）
-                // ccall(函数名, 返回值类型, [参数类型], [参数值])
+                // 调用WASM的run_kiz_code函数
                 const result = Module.ccall(
                     'run_kiz_code',
                     'number',
                     ['string', 'number'],
                     [code, code.length]
                 );
-                // 执行结果：0=成功，1=失败
                 if (result === 0) {
                     appendOutput('\n✅ Kiz code executed successfully!', 'success');
                 } else {
@@ -251,11 +295,11 @@ print({name: "Kiz", version: 0.50})</textarea>
             }
         });
 
-        // 8. 加载Emscripten胶水代码（核心：替代直接加载WASM）
-        // 动态创建script标签加载kiz.js（编译后的胶水代码）
+        // 9. 加载Emscripten胶水代码（必须修改路径！）
         function loadKizWasm() {
             const script = document.createElement('script');
-            // ********** 关键：修改为你的kiz.js实际路径 **********
+            // ********** 请修改为你的kiz.js实际路径 **********
+            // 示例：script.src = 'https://playground.kiz.random321.com/kiz.js';
             script.src = 'kiz.js';
             script.type = 'text/javascript';
 
@@ -266,14 +310,14 @@ print({name: "Kiz", version: 0.50})</textarea>
                 appendOutput('📝 Write your Kiz code and click RUN!\n', 'info');
                 isLoaded = true;
                 runBtn.disabled = false;
-                // 初始化Kiz VM（调用WASM的初始化函数）
+                // 初始化Kiz VM
                 Module.ccall('kiz_wasm_init', 'void', [], []);
             };
 
             // 加载失败
             script.onerror = function(err) {
                 output.innerHTML = '';
-                appendOutput(`❌ Failed to load Kiz WASM: ${err.message}\n`, 'error');
+                appendOutput(`❌ Failed to load Kiz WASM: ${err.message || 'unknown error'}\n`, 'error');
                 appendOutput('💡 Check if kiz.js/kiz.wasm are in the correct path!', 'error');
             };
 
