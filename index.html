@@ -350,58 +350,89 @@ print({name: "Kiz", version: 0.50})`;
             output.innerHTML = '';
         });
 
-        runBtn.addEventListener('click', () => {
-            if (!isLoaded) return;
-            output.innerHTML = '';
-            const code = getEditorPureText().trim();
-            if (!code) {
-                appendOutput('❌ Empty Kiz code!\n', 'error');
-                return;
-            }
-
-            try {
-                const result = Module.ccall(
-                    'run_kiz_code',
-                    'number',
-                    ['string', 'number'],
-                    [code, code.length]
-                );
-                appendOutput(result === 0 
-                    ? '\n✅ Kiz code executed successfully!' 
-                    : '\n❌ Kiz code executed with errors!',
-                    result === 0 ? 'success' : 'error'
-                );
-            } catch (err) {
-                appendOutput(`\n❌ JS/WASM call error: ${err.message}\n`, 'error');
-            }
-        });
 
         // 10. 加载WASM（修改路径）
-        function loadKizWasm() {
-            const script = document.createElement('script');
-            // ********** 替换为你的kiz.js实际路径 **********
-            script.src = 'kiz.js';
-            script.type = 'text/javascript';
-
-            script.onload = function() {
-                output.innerHTML = '';
-                appendOutput('✅ Kiz WASM runtime loaded successfully!\n', 'success');
-                appendOutput('📝 Write your Kiz code and click RUN!\n', 'info');
-                isLoaded = true;
-                runBtn.disabled = false;
-                Module.ccall('kiz_wasm_init', 'void', [], []);
-            };
-
-            script.onerror = function(err) {
-                output.innerHTML = '';
-                appendOutput(`❌ Failed to load Kiz WASM: ${err.message || 'unknown error'}\n`, 'error');
-                appendOutput('💡 Check if kiz.js/kiz.wasm are in the correct path!', 'error');
-            };
-
-            document.body.appendChild(script);
+        // 修改这部分代码
+function loadKizWasm() {
+    // 配置Module的打印函数，用于捕获Kiz的输出
+    window.Module = {
+        print: function(text) {
+            appendOutput(text, 'success');
+        },
+        printErr: function(text) {
+            appendOutput(text, 'error');
         }
+    };
+    
+    const script = document.createElement('script');
+    script.src = 'kiz_wasm.js';
+    script.type = 'text/javascript';
 
-        window.addEventListener('load', loadKizWasm);
+    script.onload = async function() {
+        try {
+            // 使用ES6模块方式加载
+            const createKizModule = await createKizModule();
+            
+            // 初始化模块
+            if (createKizModule._kiz_wasm_init) {
+                createKizModule._kiz_wasm_init();
+            }
+            
+            output.innerHTML = '';
+            appendOutput('✅ Kiz WASM runtime loaded successfully!\n', 'success');
+            appendOutput('📝 Write your Kiz code and click RUN!\n', 'info');
+            isLoaded = true;
+            runBtn.disabled = false;
+            
+            // 保存模块引用
+            window.kizModule = createKizModule;
+        } catch (err) {
+            output.innerHTML = '';
+            appendOutput(`❌ Failed to initialize Kiz WASM: ${err.message}\n`, 'error');
+        }
+    };
+
+    script.onerror = function(err) {
+        output.innerHTML = '';
+        appendOutput(`❌ Failed to load Kiz WASM: ${err.message || 'unknown error'}\n`, 'error');
+    };
+
+    document.body.appendChild(script);
+}
+
+// 修改运行代码的函数
+runBtn.addEventListener('click', () => {
+    if (!isLoaded || !window.kizModule) {
+        appendOutput('❌ Kiz runtime not loaded yet!\n', 'error');
+        return;
+    }
+    
+    output.innerHTML = '';
+    const code = getEditorPureText().trim();
+    if (!code) {
+        appendOutput('❌ Empty Kiz code!\n', 'error');
+        return;
+    }
+
+    try {
+        // 使用ccall调用WASM函数
+        const resultPtr = window.kizModule.ccall(
+            'run_code',
+            'number',
+            ['string', 'number'],
+            [code, code.length]
+        );
+        
+        // 将指针转换为字符串
+        const result = window.kizModule.UTF8ToString(resultPtr);
+        
+        appendOutput('=== Execution Result ===\n', 'info');
+        appendOutput(result + '\n', result.includes('Error') ? 'error' : 'success');
+        
+    } catch (err) {
+        appendOutput(`❌ JS/WASM call error: ${err.message}\n`, 'error');
+    }
+});
     </script>
 </body>
 </html>
