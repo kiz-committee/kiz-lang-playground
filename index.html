@@ -187,11 +187,12 @@
         let isLoaded = false;
         const INIT_KIZ_CODE = `# Kiz Language Playground
 # Try some code below!
-print("Hello Kiz! 🐱")
+name = "Kiz"
+print(f"Hello from {name}! 🐱")
 print(1 + 2 * 3)
-print("PI =", 3.1415926)
+print(f"0.1 + 0.2 == 0.3 : {0.1+0.2==0.3}")
 print(["a", "b", "c"][1])
-print({name: "Kiz", version: 0.50})`;
+print({"name": "Kiz", "version": "v2026"})`;
 
         // 4. 输出工具函数
         function appendOutput(text, type = 'info') {
@@ -351,31 +352,36 @@ print({name: "Kiz", version: 0.50})`;
         });
 
 
-        // 10. 加载WASM（修改路径）
-        // 修改这部分代码
-function loadKizWasm() {
-    // 配置Module的打印函数，用于捕获Kiz的输出
-    window.Module = {
-        print: function(text) {
-            appendOutput(text, 'success');
-        },
-        printErr: function(text) {
-            appendOutput(text, 'error');
-        }
-    };
-    
-    const script = document.createElement('script');
-    script.src = 'kiz_wasm.js';
-    script.type = 'text/javascript';
-
-    script.onload = async function() {
+    async function loadKizWasm() {
         try {
-            // 使用ES6模块方式加载
-            const createKizModule = await createKizModule();
+            // 直接使用全局的 createKizModule（根据你的 CMake 配置）
+            window.kizModule = await createKizModule({
+                // 配置打印输出
+                print: function(text) {
+                    appendOutput(text + '\n', 'success');
+                },
+                printErr: function(text) {
+                    appendOutput(text + '\n', 'error');
+                },
+                // 如果需要，设置其他选项
+                locateFile: function(path) {
+                    if (path.endsWith('.wasm')) {
+                        return 'kiz_wasm.wasm';
+                    }
+                    return path;
+                }
+            });
             
-            // 初始化模块
-            if (createKizModule._kiz_wasm_init) {
-                createKizModule._kiz_wasm_init();
+            // 检查导出的函数
+            console.log("Module loaded, functions:", Object.keys(window.kizModule));
+            
+            // 检查是否有 initialize_runtime 或 kiz_wasm_init 函数
+            if (window.kizModule._initialize_runtime) {
+                window.kizModule._initialize_runtime();
+                console.log("Initialized runtime");
+            } else if (window.kizModule._kiz_wasm_init) {
+                window.kizModule._kiz_wasm_init();
+                console.log("Initialized with kiz_wasm_init");
             }
             
             output.innerHTML = '';
@@ -384,55 +390,69 @@ function loadKizWasm() {
             isLoaded = true;
             runBtn.disabled = false;
             
-            // 保存模块引用
-            window.kizModule = createKizModule;
         } catch (err) {
             output.innerHTML = '';
-            appendOutput(`❌ Failed to initialize Kiz WASM: ${err.message}\n`, 'error');
+            appendOutput(`❌ Failed to load Kiz WASM: ${err.message}\n`, 'error');
+            console.error("Load error:", err);
         }
-    };
+    }
 
-    script.onerror = function(err) {
+    // 修改运行代码的函数
+    runBtn.addEventListener('click', () => {
+        if (!isLoaded || !window.kizModule) {
+            appendOutput('❌ Kiz runtime not loaded yet!\n', 'error');
+            return;
+        }
+        
         output.innerHTML = '';
-        appendOutput(`❌ Failed to load Kiz WASM: ${err.message || 'unknown error'}\n`, 'error');
-    };
+        const code = getEditorPureText().trim();
+        if (!code) {
+            appendOutput('❌ Empty Kiz code!\n', 'error');
+            return;
+        }
 
-    document.body.appendChild(script);
-}
+        try {
+            // 方法1: 直接调用导出的 C 函数（如果存在）
+            if (window.kizModule._run_code) {
+                const resultPtr = window.kizModule._run_code(code);
+                const result = window.kizModule.UTF8ToString(resultPtr);
+                
+                appendOutput('=== Execution Result ===\n', 'info');
+                appendOutput(result + '\n', result.includes('Error') ? 'error' : 'success');
+            }
+            // 方法2: 使用 ccall
+            else if (window.kizModule.ccall) {
+                const resultPtr = window.kizModule.ccall(
+                    'run_code',
+                    'string',
+                    ['string'],
+                    [code]
+                );
+                
+                appendOutput('=== Execution Result ===\n', 'info');
+                appendOutput(resultPtr + '\n', resultPtr.includes('Error') ? 'error' : 'success');
+            } else {
+                appendOutput('❌ run_code function not found in module\n', 'error');
+                console.log("Available functions:", Object.keys(window.kizModule));
+            }
+            
+        } catch (err) {
+            appendOutput(`❌ JS/WASM call error: ${err.message}\n`, 'error');
+            console.error("Execution error:", err);
+        }
+    });
 
-// 修改运行代码的函数
-runBtn.addEventListener('click', () => {
-    if (!isLoaded || !window.kizModule) {
-        appendOutput('❌ Kiz runtime not loaded yet!\n', 'error');
-        return;
-    }
-    
-    output.innerHTML = '';
-    const code = getEditorPureText().trim();
-    if (!code) {
-        appendOutput('❌ Empty Kiz code!\n', 'error');
-        return;
-    }
-
-    try {
-        // 使用ccall调用WASM函数
-        const resultPtr = window.kizModule.ccall(
-            'run_code',
-            'number',
-            ['string', 'number'],
-            [code, code.length]
-        );
+    // 页面加载时初始化
+    window.addEventListener('DOMContentLoaded', () => {
+        // 初始填充+高亮
+        editor.textContent = INIT_KIZ_CODE;
+        highlightEditor();
+        editor.focus();
+        setCursorByOffset(getEditorPureText().length);
         
-        // 将指针转换为字符串
-        const result = window.kizModule.UTF8ToString(resultPtr);
-        
-        appendOutput('=== Execution Result ===\n', 'info');
-        appendOutput(result + '\n', result.includes('Error') ? 'error' : 'success');
-        
-    } catch (err) {
-        appendOutput(`❌ JS/WASM call error: ${err.message}\n`, 'error');
-    }
-});
-    </script>
+        // 加载WASM
+        loadKizWasm();
+    });
+</script>
 </body>
 </html>
